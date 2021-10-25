@@ -98,7 +98,7 @@ stringtie [(10/19/2015 - v1.1.0 release)](https://ccb.jhu.edu/software/stringtie
 # RNA star assembles reads into transcripts using a reference genome guide
 # March 2020
 ########### Change '-N' jobname, '-l h_vmem=' (storage), '-pe smp #' (number of cores)
-########### mapping to reference O. niloticus reference genome with 5 bioreprs per species per jaw
+########### mapping to reference O. niloticus reference genome with 5 bioreps per species per jaw
 
 
 for i in `cat starinputfiles2`;
