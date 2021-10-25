@@ -1,0 +1,872 @@
+---
+title: "Nose flap data 2020"
+author: "Anna Duenser"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document: default
+  bookdown::pdf_document2:
+    keep_tex: yes
+  bookdown::gitbook:
+    config:
+      fontsettings:
+        theme: night
+        family: sans
+        size: 2
+header-includes:
+- \usepackage{hyperref}
+- \usepackage{float}
+- \usepackage{caption}
+- \captionsetup[figure]{font=small}
+urlcolor: blue
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(
+  fig.pos   = "H",
+  out.extra = "",
+  fig.align = "center",
+  out.width = "100%",
+  echo      = TRUE,
+  include   = TRUE
+  )
+# Our Libraries
+VLIBS <- c("tidyverse", "patchwork", "here", "readxl", "bookdown")
+# Use Colors in Plots
+# https://stackoverflow.com/questions/42458412/plotting-data-by-color-variable-with-ggplot2-in-r#comment72062654_42458412
+colorBlindGrey  <- c("#C5C1C1" ,"#464343", "#E69F00", "#56B4E9", "#009E73",
+                       "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+F_LoadLibs <- function(x){
+  print(x)
+  if(!require(x, character.only = TRUE)) install.packages(x); library(x, character.only = TRUE);
+  return(T)
+}
+# https://stackoverflow.com/questions/62140483/how-to-interpret-dplyr-message-summarise-regrouping-output-by-x-override
+options(dplyr.summarise.inform=F)
+# https://stackoverflow.com/questions/13286531/how-to-suppress-warnings-when-plotting-with-ggplot
+options(warn=-1)
+sapply(VLIBS, F_LoadLibs)
+rm(VLIBS, F_LoadLibs)
+
+```
+
+
+## Trimming, Assembly and Annotation {-}
+
+##### 1. [Trimmomatic](http://www.usadellab.org/cms/?page=trimmomatic) (Server v0.39) [manual](http://www.usadellab.org/cms/uploads/supplementary/Trimmomatic/TrimmomaticManual_V0.32.pdf) {-}
+
+Load TruSeq3-PE-2.fa (adapter sequence file) in cwd
+01_trim.sh
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# anna.duenser@gmail.com
+# March 2020
+# nose flap samples
+# ! copy TrueSeq3-PE-2.fa to cwd
+
+########### trim adapters and drop reads shorter than 70 bp
+
+for i in `ls *.fq.gz | grep .1.fq.gz | cut -f -2 -d"."`;
+
+do
+
+
+qsub -q all.q -b y -cwd -N trim -l h_vmem=4G -pe smp 8 -o $i".trim.log" -e $i".trim.err" /usr/bin/java -jar /cl_tmp/singh_duenser/tools/Trimmomatic-0.39/trimmomatic-0.39.jar PE -threads 8 /cl_tmp/singh_duenser/Ehsan/$i".1.fq.gz" /cl_tmp/singh_duenser/Ehsan/$i".2.fq.gz" /cl_tmp/singh_duenser/Ehsan/trimmomatic/$i".1.paired.fq.gz" /cl_tmp/singh_duenser/Ehsan/trimmomatic/$i".1.unpaired.fq.gz" /cl_tmp/singh_duenser/Ehsan/trimmomatic/$i".2.paired.fq.gz" /cl_tmp/singh_duenser/all_adult/trimmomatic/$i".2.unpaired.fq.gz" ILLUMINACLIP:TruSeq3-PE-2.fa:2:30:10:8:keepBothReads SLIDINGWINDOW:4:28 MINLEN:70 &
+
+done
+
+```
+
+##### 2. RNAStar (2.7.3.a) {-}
+
+[RNAStar](https://github.com/alexdobin/STAR) is an RNAseq-aligner 
+
+Reference genome:	O_niloticus_UMD_NMBU.dna.toplevel.fa
+
+`--outSAMattrIHstart`:
+either starting at 0 or 1 (one is default) (- can be left at default)
+
+stringtie [(10/19/2015 - v1.1.0 release)](https://ccb.jhu.edu/software/stringtie/history.shtml)
+"modifying the tag HI in the BAM alignment file to start at 0 (as previously required with STAR produced alignment files) is no longer needed starting at this version"
+
+
+02_assembly_STAR.sh:
+```{bash eval = FALSE}
+#!/bin/bash
+
+# pooja.singh09@gmail.com
+# RNA star assembles reads into transcripts using a reference genome guide
+# March 2020
+########### Change '-N' jobname, '-l h_vmem=' (storage), '-pe smp #' (number of cores)
+########### mapping to reference O. niloticus reference genome with 5 bioreprs per species per jaw
+
+
+for i in `cat starinputfiles2`;
+
+do
+
+qsub -q all.q -pe smp 8 -l h_vmem=4G -cwd -V -N $i".STAR" -e $i".STAR.err" -o $i".STAR.log" -b y STAR --runThreadN 8 \
+ --genomeDir /cl_tmp/singh_duenser/reference \
+ --readFilesCommand gunzip -c \
+ --readFilesIn ./trimmomatic/$i".1.paired.fq.gz" ./trimmomatic/$i".2.paired.fq.gz" \
+ --outSAMtype BAM SortedByCoordinate \
+ --twopassMode None \
+ --outFileNamePrefix ./star_assembly/$i"." \
+ --quantMode GeneCounts \
+ --outSAMstrandField intronMotif \
+ --outSAMattrIHstart 1 \
+ --outSAMattributes NH HI AS nM NM MD MC jM jI ch XS \
+ --outSAMprimaryFlag OneBestScore \
+ --outSAMmapqUnique 60 \
+ --outSAMunmapped Within  \
+ --outFilterIntronStrands RemoveInconsistentStrands \
+ --outBAMsortingBinsN 50  \
+ --limitBAMsortRAM 4000000000 &
+
+done
+
+```
+
+##### 3. [FastQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/INSTALL.txt) (v0.11.8) {-}
+
+Run FastQC before and after trimming:
+
+03_fastqc_raw.sh:
+```{bash eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# fastqc
+# March 2020
+########### Change '-N' jobname, '-l h_vmem=' (storage), '-pe smp #' (number of cores)
+########### fastqc of untrimmed reads
+
+for i in `cat samples_fastqc.txt`;
+
+do
+
+qsub -q all.q -pe smp 8 -l h_vmem=4G -cwd -V -N $i".fastqc" -o ./fastqc/"log."$i".fastqc.out" -e ./fastqc/"log."$i".fastqc.err" -b y fastqc -t 12 \
+-o /cl_tmp/singh_duenser/Ehsan/fastqc /cl_tmp/singh_duenser/Ehsan/$i".fq" &
+
+done
+
+```
+
+
+03_a_fastqc_trimed.sh:
+```{bash}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# fastqc on trimmed reads
+# March 2020
+########### Change '-N' jobname, '-l h_vmem=' (storage), '-pe smp #' (number of cores)
+########### fastqc of trimmed reads
+
+
+for i in `cat samples_fastqc_trim.txt`;
+
+do
+
+qsub -q all.q -pe smp 8 -l h_vmem=4G -cwd -V -N $i".fastqc" -o ./trimmomatic/fastqc"log."$i".fastqc.out" -e ./trimmomatic/fastqc"log."$i".fastqc.err" -b y fastqc -t 12 \
+-o /cl_tmp/singh_duenser/Ehsan/trimmomatic/fastqc /cl_tmp/singh_duenser/Ehsan/trimmomatic/$i".paired.fq.gz" &
+
+done
+
+```
+
+
+##### 4. BAM mapping statistics {-}
+
+samtools (v1.9)
+
+04_samtools_idxstats.sh:
+```{bash eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# samtool idxstats - .bam mapping statistics
+# March 2020
+########### Change '-N' jobname, '-l h_vmem=' (storage), '-pe smp #' (number of cores)
+########### samtools idxstats
+
+for i in `cat samples_samtools_idx.txt`;
+
+
+do
+
+qsub -q all.q -pe smp 8 -l h_vmem=4G -cwd -V -N $i".idxstat" -o ./star_assembly/$i".idxstat.out" -e ./star_assembly/$i".samtools_idx.err" -b y samtools idxstats --threads 12 \
+ /cl_tmp/singh_duenser/Ehsan/star_assembly/$i".Aligned.sortedByCoord.out.bam" &
+
+done
+
+```
+
+
+##### 5. [MultiQC](https://multiqc.info/docs/) (Server v1.8.dev0) {-}
+
+Add flag `--interactive` to generate interactive multiqc page. Include fastqc before and after trimming, .bam files from RNAstar and the samtools idxstats.
+
+05_multiqc.sh:
+```{bash eval = FALSE}
+#!/bin/bash
+
+# anna.duenser@gmail.com
+# March 2020
+# multiqc
+#### input: fastqc from initial .fq files, fastqc files after trimmomatic, mapped .bam files
+FILE_DIR="/cl_tmp/singh_duenser/all_st26"
+
+qsub -q all.q -b y -cwd -N multiqc -l h_vmem=4G -pe smp 8 -o "log.multiqc.out" -e "log.multiqc.err" /usr/people/EDVZ/duenser/.local/bin/multiqc \
+--interactive $FILE_DIR/fastqc_raw/ $FILE_DIR/trimmomatic/fastqc/ $FILE_DIR/star_assembly/
+```
+
+#### 6. Merge BAM files (picard 2.21.7) {-}
+
+[picard](https://github.com/broadinstitute/picard)  (2.21.7)
+
+if you get an error that you run out of threads (VM) you can specify the memory used by picard adding the `-Xmx4g` [flag](https://github.com/broadinstitute/picard/issues/1221)
+
+picard.sh: example for one species
+```{bash eval = FALSE}
+qsub -pe mpi 10 -l h_vmem=10G -b y -cwd -N picard -e picard.Lt.error -o picard.Lt.out \
+java -Dpicard.useLegacyParser=false -jar -Xmx4g /usr/people/EDVZ/duenser/tools/picard.jar MergeSamFiles \
+-I Lt.1.bam -I Lt.2.bam -I Lt.4.bam -I Lt.5.bam -I Lt.7.bam -O Lt.merged_files.bam -MSD=true \
+-VALIDATION_STRINGENCY=LENIENT
+
+echo -e "\n$(date)\n"
+```
+
+06_picard.sh
+```{bash, eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# March 2020
+# picard
+## merge single .bam files
+
+FILE_DIR="/cl_tmp/singh_duenser/Ehsan/star_assembly"
+# define temp files
+COUNTER=0
+LAST=""
+FULL=""
+
+# loop whole folder and cut path
+for i in `ls $FILE_DIR/*.bam | cut -d "/" -f 6`;
+do
+
+# for sanity check we need to remove numbering
+SANITY="$(echo $i | cut -d'.' -f 1)"
+
+# counter is only needed for first loop, because $LAST is not defined
+COUNTER=$[COUNTER + 1]
+
+if [[ "$SANITY" != "$LAST" && "$COUNTER" != 1 ]]; 
+then
+echo "######"
+echo $LAST
+echo $FULL
+
+qsub -pe mpi 10 -l h_vmem=10G -b y -cwd -N picard -e ./merged_bam_files/"picard."$LAST".err" -o ./merged_bam_files/"picard."$LAST".out" \
+java -Dpicard.useLegacyParser=false -jar -Xmx2g /usr/people/EDVZ/duenser/tools/picard.jar MergeSamFiles \
+$FULL \
+-O ./merged_bam_files/$LAST".merged_files.bam" -MSD=true \
+-VALIDATION_STRINGENCY=LENIENT
+
+# reset string
+FULL=""
+
+# wait before submitting next job
+
+sleep 2
+
+fi
+
+LAST=$SANITY
+# build Input string
+TMP="-I "$FILE_DIR/$i
+FULL=$FULL" "$TMP
+
+done
+
+echo "#######"
+echo $LAST
+echo $FULL
+echo "END"
+
+# we need to submit the last loop result here
+
+qsub -pe mpi 10 -l h_vmem=10G -b y -cwd -N picard -e ./merged_bam_files/"picard."$LAST".err" -o ./merged_bam_files/"picard."$LAST".out" \
+java -Dpicard.useLegacyParser=false -jar /usr/people/EDVZ/duenser/tools/picard.jar MergeSamFiles \
+$FULL \
+-O ./merged_bam_files/$LAST".merged_files.bam" -MSD=true -VALIDATION_STRINGENCY=LENIENT
+
+```
+
+
+
+
+#### 8. [StringTie](http://ccb.jhu.edu/software/stringtie/) (2.0.6) 
+input merged bam files {-}
+
+08_stringtie_merged_bam.sh:
+```{bash, eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# March 2020
+# stringtie
+## run stringtie on merged bam files = MergedBam
+
+FILE_DIR="/cl_tmp/singh_duenser/Ehsan"
+
+
+for i in `ls $FILE_DIR/merged_bam_files/*.bam | cut -d "/" -f 6`;
+
+do
+
+S_NAME="$(echo $i | cut -d'.' -f1)"
+
+
+qsub -pe mpi 10 -l h_vmem=10G -b y -cwd -N "stringtieMB."$S_NAME -e ./stringtie_merged_bam/"stringtie_MergedBam."$S_NAME".err" \
+-o ./stringtie_merged_bam/"stringtie_MergedBam."$S_NAME".out" \
+/usr/people/EDVZ/duenser/tools/stringtie-2.0.6.Linux_x86_64/stringtie \
+$FILE_DIR/merged_bam_files/$i --rf -f 0.15 -m 200 -a 10 -j 1 -c 2 -g 50 -M 0.95 -o ./stringtie_merged_bam/$S_NAME".MergedBam.gtf" &
+
+sleep 1
+
+done
+
+```
+
+##### 9.-12. StringTie merge (2.0.6) {-}
+
+- Stringtie provides a merge command to combine predicted transcript GTF files from across different libraries
+- Once you have a merged GTF file you can run Stringtie again with this instead of the known transcripts GTF file we used above
+- Stringtie also provides 'gffcompare' to compare predicted transcripts to known transcripts
+- Refer to the [Stringtie manual](https://ccb.jhu.edu/software/stringtie/index.shtml?t=manual) for a more detailed explanation
+
+first we merge the .gtf files per species (the 5 bio reps each)
+09_stringtieMerge_single.sh:
+```{bash, eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# March 2020
+# stringtie --merge
+## merge single .gtf files for each species
+
+FILE_DIR="/cl_tmp/singh_duenser/Ehsan/stringtie_single"
+
+
+for i in `ls $FILE_DIR/*.1.gtf | cut -d "/" -f 6 | cut -d'.' -f1`;
+
+do
+
+qsub -pe mpi 10 -l h_vmem=10G -b y -cwd -N "stringtieMmerge."$i -e $FILE_DIR/stringtieMerge_single/"stringtieM."$i".err" \
+-o $FILE_DIR/stringtieMerge_single/"stringtieM."$i".out" \
+/usr/people/EDVZ/duenser/tools/stringtie-2.0.6.Linux_x86_64/stringtie --merge \
+-F 1.0 -T 1.0 $FILE_DIR/$i"."*".gtf" \
+-o $FILE_DIR/stringtieMerge_single/"stringtieMerge_single."$i".gtf" &
+
+sleep 1
+echo "yippie!"
+
+done
+
+
+```
+
+Then merge the .gtf files from the merged .bam files and the ones that we just created from the single .gtfs
+10_merge_per_species.sh:
+```{bash, eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# April 2020
+# stringtie_merge
+## merge the .gtf files originated from single .bam files (and then merged) and the ones from merged .bam files
+
+
+FILE_DIR="/cl_tmp/singh_duenser/Ehsan"
+
+for i in `ls $FILE_DIR/stringtie_merged_bam/*.gtf | cut -d "/" -f 6 | cut -d "." -f1`;
+
+do
+
+qsub -pe mpi 10 -l h_vmem=10G -b y -cwd -N "all_gtf_merge."$i \
+-e $FILE_DIR/all_gtf_merged/"all_gtf_merged."$i".err" -o $FILE_DIR/all_gtf_merged/"all_gtf_merged."$i".out" \
+/usr/people/EDVZ/duenser/tools/stringtie-2.0.6.Linux_x86_64/stringtie --merge -F 1.0 -T 1.0 \
+$FILE_DIR/stringtie_single/stringtieMerge_single/"stringtieMerge_single."$i".gtf" \
+$FILE_DIR/stringtie_merged_bam/$i".MergedBam.gtf" \
+-o $FILE_DIR/species_gtf_merged/"species_gtf_merged."$i".gtf" &
+
+echo "yesyesyes"
+sleep 1
+
+done
+
+```
+
+Then take those and merge the species per lake
+11_merge_per_lake.sge.sh
+```{bash, eval = FALSE}
+#
+#$ -N merge_nose_lake	# Job name
+#$ -S /bin/bash         # Set shell to bash
+#
+#$ -l h_vmem=2G         # Request Max. Virt. Mem.
+#
+#$ -cwd                 # Change to current working directory
+#$ -V                   # Export environment variables into script
+#$ -pe smp 2    # Select the parallel environment
+#
+#$ -o log.$JOB_NAME.$JOB_ID.out      # SGE-Output File
+#$ -e log.$JOB_NAME.$JOB_ID.err      # SGE-Error File
+
+#print some info to log
+echo "Running under shell '${SHELL}' in directory '`pwd`' using $NSLOTS slots"
+echo "Host: $HOSTNAME"
+echo "Job: $JOB_ID"
+
+#get going
+echo -e "\n$(date)\n"
+
+# anna.duenser@gmail.com
+# NOvember 2020
+# stringtie --merge
+## merge .gtf files
+
+stringtie -p 10 --merge -T 1 -F 1 \
+./species_gtf_merged/species_gtf_merged.Lt.gtf \
+./species_gtf_merged/species_gtf_merged.Tt.gtf \
+-o ./species_gtf_merged/merged.LM.nose.gtf
+
+stringtie -p 10 --merge -T 1 -F 1 \
+./species_gtf_merged/species_gtf_merged.On.gtf \
+./species_gtf_merged/species_gtf_merged.Ov.gtf \
+-o ./species_gtf_merged/merged.LT.nose.gtf
+
+```
+
+And finaly the two lake .gtf files
+12_merge.sge.sh
+```{bash, eval = FALSE}
+#
+#$ -N merge_all	# Job name
+#$ -S /bin/bash         # Set shell to bash
+#
+#$ -l h_vmem=2G         # Request Max. Virt. Mem.
+#
+#$ -cwd                 # Change to current working directory
+#$ -V                   # Export environment variables into script
+#$ -pe smp 2    # Select the parallel environment
+#
+#$ -o log.$JOB_NAME.$JOB_ID.out      # SGE-Output File
+#$ -e log.$JOB_NAME.$JOB_ID.err      # SGE-Error File
+
+#print some info to log
+echo "Running under shell '${SHELL}' in directory '`pwd`' using $NSLOTS slots"
+echo "Host: $HOSTNAME"
+echo "Job: $JOB_ID"
+
+#get going
+echo -e "\n$(date)\n"
+
+# anna.duenser@gmail.com
+# November 2020
+# stringtie --merge
+## merge .gtf files
+
+stringtie -p 10 --merge -T 1 -F 1 \
+./species_gtf_merged/merged.LM.nose.gtf \
+./species_gtf_merged/merged.LT.nose.gtf \
+-o ./all_gtf_merged/merged.nose.gtf
+
+```
+
+We do this step-wise to minimize false positives by merging
+
+##### 13. Annotation using gffcompare {-}
+[gffcompare](https://ccb.jhu.edu/software/stringtie/gffcompare.shtml) v0.11.2
+
+The program gffcompare can be used to compare, merge, annotate and estimate accuracy of one or more GFF files (the “query” files), when compared with a reference annotation (also provided as GFF).
+
+Note: the .refmap and .tmap output files described below are created for each query `<input_file>' given, in the same directories where those input files reside.
+
+13_gffcmp.sh
+```{bash, eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# November 2020
+# gffcompare
+## annotate .gtf files
+
+# -r comparing with a reference annotation - will produce class codes: https://ccb.jhu.edu/software/stringtie/gffcompare.shtml
+# -e Maximum distance (range) allowed from free ends of terminal exons of reference transcripts when assessing exon accuracy. By default, this is 100.
+# -d Maximum distance (range) for grouping transcript start sites, by default 100.
+
+FILE_DIR="/cl_tmp/singh_duenser/Ehsan"
+
+qsub -pe mpi 10 -l h_vmem=10G -b y -cwd -N gffcmp.stepwise \
+-e $FILE_DIR/gffcompare/gffcmp.nose.stepwise.err -o $FILE_DIR/gffcompare/gffcmp.nose.stepwise.out \
+/usr/people/EDVZ/duenser/tools/gffcompare-0.11.2.Linux_x86_64/gffcompare -r /cl_tmp/singh_duenser/reference/O_niloticus_UMD_NMBU.99.gff3 -e 100 -d 100 \
+$FILE_DIR/species_gtf_merged/all_gtf_merged/merged.nose.gtf -o $FILE_DIR/gffcompare/gffcmp.stringtieMerge_stepwise.nose
+
+```
+
+#### 14. Filter class codes {-}
+
+Run this using `Rscript filter.R`
+We filter for the [class code](https://ccb.jhu.edu/software/stringtie/gffcompare.shtml) p and single exons with class code u.
+
+14R_filter_script.R
+```{r, eval = FALSE}
+# Filter annotation.gtf files
+# September 2020
+# anna.duenser@gmail.com
+
+FILE.DIR = "/cl_tmp/singh_duenser/Ehsan/gffcompare" #!change this
+setwd(FILE.DIR) 
+
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#  install.packages("BiocManager")
+#BiocManager::install("rtracklayer")
+install.packages("tidyverse", repos = 'https://cran.wu.ac.at/')
+library("tidyverse")
+install.packages("rtracklayer", repos = 'https://cran.wu.ac.at/')
+library("rtracklayer")
+library("dplyr")
+library("BiocGenerics")
+
+
+DATE <- format(Sys.time(), "%m%d%Y")
+
+all.files <- list.files(FILE.DIR, full.names = FALSE)
+gffcmp_files <- as.vector(grep("gffcmp.*annotated.gtf", all.files, value = TRUE))
+
+my_log <- file(paste("log_filterscritp_R_", DATE, ".txt", sep = ""))
+sink(my_log, append = TRUE, type = "output", split = TRUE)
+
+filter_function <- function(filename_1){
+  print("Loaded Files:")
+  print(filename_1)
+  l1 <- length(filename_1)
+  print("Number of Files:")
+  print(l1)
+  
+  for (i in filename_1){
+    print("Filtering:")
+    print(i)
+
+    # import annotation file
+    # import gffread file with long introns filtered out
+    all <- import(i)
+    all <- as_tibble(all)
+    print("Imported Rows:")
+    print(nrow(all))
+    # filter all single exons not in the reference (class code "u")
+    # filter class p"
+    #  do not mess with the filtering steps. n() is needed to keep grouping alive a bit longer!
+    
+    # group by gene_id, to exclude genes that also include monoexonic isoforms and only 
+    # filter monoexonic transcripts that ar not in the reference
+    all_without_singleUexons <- all %>% group_by(gene_id) %>% filter(!(n() == 2 && class_code == "u"))
+    print("Removed single exon with class_code 'u'")
+    print(nrow(all_without_singleUexons)-nrow(all))
+    
+    # filter_o <- filtered_exons_introns %>% group_by(transcript_id) %>% filter(!(n() >= 2 && class_code == "o"))
+    filter_p <- all_without_singleUexons %>% group_by(transcript_id) %>% filter(!(n() >= 2 && class_code == "p"))
+    print("Removed transcripts with class_code 'p'")
+    print(nrow(filter_p)-nrow(all))
+    
+    filename <- paste("filtered.", i, sep = "")
+    print("Saving")
+    print(filename)
+    export(filter_p, filename, format="GTF")
+    print(Sys.time())
+  }
+  return(TRUE)
+}
+
+
+filter_function(gffcmp_files)
+
+sink()
+
+
+##########################################################################################
+quit(save="no")
+
+
+```
+
+For submitting the R script on the server: 
+
+14_R_filter_classcode.sge
+```{bash, eval = FALSE}
+#
+#$ -N filterR		# Job name
+#$ -S /bin/bash         # Set shell to bash
+#
+#$ -l h_vmem=2G         # Request Max. Virt. Mem.
+#
+#$ -cwd                 # Change to current working directory
+#$ -V                   # Export environment variables into script
+#$ -pe smp 2    # Select the parallel environment
+#
+#$ -o log.$JOB_NAME.$JOB_ID.out      # SGE-Output File
+#$ -e log.$JOB_NAME.$JOB_ID.err      # SGE-Error File
+
+#print some info to log
+echo "Running under shell '${SHELL}' in directory '`pwd`' using $NSLOTS slots"
+echo "Host: $HOSTNAME"
+echo "Job: $JOB_ID"
+
+#get going
+echo -e "\n$(date)\n"
+
+# anna.duenser@gmail.com
+# April 2020
+# Rscript
+## filtering the class codes
+
+
+/usr/people/EDVZ/duenser/tools/R-patched/bin/Rscript 14R_filter_script.R
+
+```
+
+#### 15. Filter max introns with gffread {-}
+
+As the max length of introns in our reference is 200000, we also use this for our reference file
+
+15_gffread_filtermaxintrons_nose.sge.sh
+```{bash, eval = FALSE}
+#
+#$ -N gffread	        # Job name
+#$ -S /bin/bash         # Set shell to bash
+#
+#$ -l h_vmem=2G         # Request Max. Virt. Mem.
+#
+#$ -cwd                 # Change to current working directory
+#$ -V                   # Export environment variables into script
+#$ -pe smp 2    # Select the parallel environment
+#
+#$ -o log.$JOB_NAME.$JOB_ID.out      # SGE-Output File
+#$ -e log.$JOB_NAME.$JOB_ID.err      # SGE-Error File
+
+#print some info to log
+echo "Running under shell '${SHELL}' in directory '`pwd`' using $NSLOTS slots"
+echo "Host: $HOSTNAME"
+echo "Job: $JOB_ID"
+
+#get going
+echo -e "\n$(date)\n"
+
+########### '-N' jobname, '-l h_vmem=' (Speicher), '-pe smp number' (number of cores)
+
+# anna.duenser@gmail.com
+# April 2020
+# gffread
+## use gffread to filter out introns longer than 200000
+
+FILE_DIR="/cl_tmp/singh_duenser/Ehsan"
+
+for i in `ls $FILE_DIR/gffcompare/filtered.*.annotated.gtf | cut -d "/" -f 6`;
+
+do 
+
+gffread $FILE_DIR/gffcompare/$i -o $FILE_DIR/gffread/"gffread."$i -i 200000 -T
+
+done
+
+```
+
+#### 16. Final gffcompare {-}
+
+As we loose the class codes after the maxintron filter, we run gffcompare once more
+
+16_final_gffcmp.sh
+```{bash, eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# April 2020
+# gffcompare
+## annotate .gtf files
+
+# -r comparing with a reference annotation - will produce class codes: https://ccb.jhu.edu/software/stringtie/gffcompare.shtml
+# -e Maximum distance (range) allowed from free ends of terminal exons of reference transcripts when assessing exon accuracy. By default, this is 100.
+# -d Maximum distance (range) for grouping transcript start sites, by default 100.
+
+FILE_DIR="/cl_tmp/singh_duenser/Ehsan/"
+
+# gffcompare filtered gtf file (after gffread you loose the class codes info)
+
+qsub -pe mpi 10 -l h_vmem=10G -b y -cwd -N final.gffcmp \
+-e $FILE_DIR/gffcmp.nose.stepwise.err -o $FILE_DIR/gffcmp.nose.stepwise.out \
+/usr/people/EDVZ/duenser/tools/gffcompare-0.11.2.Linux_x86_64/gffcompare -r /cl_tmp/singh_duenser/reference/O_niloticus_UMD_NMBU.99.gff3 -e 100 -d 100 \
+$FILE_DIR/gffread/gffread.filtered.gffcmp.stringtieMerge_stepwise.nose.annotated.gtf -o $FILE_DIR/gffread/final.filtered.gffread.gffcmp.nose
+
+```
+
+#### 17. Run stringtie with the new annotations to generate expression estimates {-}
+
+`-M 0.0` = no multimapping allowed
+This creates directories for each samples with several files inside
+
+```{bash, eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# September 2020
+# stringtie
+## Run stringtie with the new annotations
+# -M to reduce multimapping, -e to only allow transcripts in the hopefully soon filtered annotation file, --rf strand info, -B ballgown files
+
+FILE_DIR_STAR="/cl_tmp/singh_duenser/Ehsan/star_assembly"
+FILE_DIR_OUT="/cl_tmp/singh_duenser/Ehsan/count_matrices"
+FILE_DIR_ANNO="/cl_tmp/singh_duenser/Ehsan/gffread"
+
+for i in `cat samples_samtools_idx.txt`;
+ 
+do
+
+qsub -q all.q -pe smp 8 -l h_vmem=4G -cwd -V -N $i".stringtie.all" \
+-o $FILE_DIR_OUT/"log.stringtie.all.out" -e $FILE_DIR_OUT/"log.stringtie.all.err" -b y \
+/usr/people/EDVZ/duenser/tools/stringtie-2.0.6.Linux_x86_64/stringtie -M 0.0 -e -B -G \
+$FILE_DIR_ANNO/final.filtered.gffread.gffcmp.nose.annotated.gtf \
+--rf  -o $FILE_DIR_OUT/$i/transcripts.gtf \
+-A $FILE_DIR_OUT/$i/gene_abundance.tsv \
+$FILE_DIR_STAR/$i".Aligned.sortedByCoord.out.bam"
+
+sleep 1
+
+done 
+
+
+```
+
+#### 18. Create expression matrices {-}
+
+with a pearl script from the [griffithlab](https://github.com/griffithlab/rnaseq_tutorial/blob/master/scripts/stringtie_expression_matrix.pl) as part of their [rna_seq tutorial](https://github.com/griffithlab/rnaseq_tutorial) on gitthub
+
+stringtie_expression_matrix.pl
+```{bash eval = FALSE}
+wget https://raw.githubusercontent.com/griffithlab/rnaseq_tutorial/master/scripts/stringtie_expression_matrix.pl
+chmod +x stringtie_expression_matrix.pl
+```
+
+I needed to change a regular expression:
+change regular expression on line [153](https://github.com/griffithlab/rnaseq_tutorial/issues/24) of the script:
+
+"Your entry looks like this: transcript_id "Cvel_145.t1"
+I believe the "." character does not get matched by `\w+` in Perl."
+
+```{bash eval = FALSE}
+        }elsif ($entry[8] =~ /transcript_id\s+\"(\w+)\"\;/){
+
+#change to this: 
+
+        }elsif ($entry[8] =~ /transcript_id\s+\"(\S+)\"\;/){
+```
+
+The bash script to execute the stringtie_expression_matrix.pl
+
+18_final_expression_matrix.sge.sh
+```{bash, eval = FALSE}
+#
+#$ -N expr_matrices # Job name
+#$ -S /bin/bash # Set shell to bash
+#
+#$ -l h_vmem=2G # Request Max. Virt. Mem.
+#
+#$ -cwd # Change to current working directory
+#$ -V   # Export environment variables into script
+#$ -pe smp 2    # Select the parallel environment
+#
+#$ -o log.$JOB_NAME.$JOB_ID.out # SGE-Output File
+#$ -e log.$JOB_NAME.$JOB_ID.err # SGE-Error File
+
+#print some info to log
+echo "Running under shell '${SHELL}' in directory '`pwd`' using $NSLOTS slots"
+echo "Host: $HOSTNAME"
+echo "Job: $JOB_ID"
+
+#get going
+echo -e "\n$(date)\n"
+
+# anna.duenser@gmail.com
+# April 2020
+# final expression matrix, submission script
+
+FILE_DIR="/cl_tmp/singh_duenser/Ehsan/count_matrices"
+
+$FILE_DIR/stringtie_expression_matrix.pl \
+--expression_metric=TPM \
+--result_dirs='Lt.1,Lt.2,Lt.3,Lt.4,Lt.5,On.1,On.2,On.3,On.4,On.5,Ov.1,Ov.2,Ov.3,Ov.4,Ov.5,Tt.1,Tt.2,Tt.3,Tt.4,Tt.5' \
+--transcript_matrix_file=transcript_tpms_nose.tsv --gene_matrix_file=gene_tpms_nose.tsv
+
+$FILE_DIR/stringtie_expression_matrix.pl \
+--expression_metric=FPKM \
+--result_dirs='Lt.1,Lt.2,Lt.3,Lt.4,Lt.5,On.1,On.2,On.3,On.4,On.5,Ov.1,Ov.2,Ov.3,Ov.4,Ov.5,Tt.1,Tt.2,Tt.3,Tt.4,Tt.5' \
+--transcript_matrix_file=transcript_fpkm_nose.tsv --gene_matrix_file=gene_fpkm_nose.tsv
+
+$FILE_DIR/stringtie_expression_matrix.pl \
+--expression_metric=Coverage \
+--result_dirs='Lt.1,Lt.2,Lt.3,Lt.4,Lt.5,On.1,On.2,On.3,On.4,On.5,Ov.1,Ov.2,Ov.3,Ov.4,Ov.5,Tt.1,Tt.2,Tt.3,Tt.4,Tt.5' \
+--transcript_matrix_file=transcript_coverage_nose.tsv --gene_matrix_file=gene_coverage_nose.tsv
+
+echo -e "\n$(date)\n"
+
+```
+
+#### 19. Run prepDE.py to get count matrices for DESeq2
+
+The prepDE.py script comes with the stringtie version (2.0.6.)
+
+```{bash, eval = FALSE}
+#!bin/bash
+
+# anna.duenser@gmail.com
+# April 2020
+# run prepDE.py
+
+FILE_DIR="/cl_tmp/singh_duenser/Ehsan/count_matrices"
+
+qsub -q all.q -pe smp 12 -l h_vmem=4G -cwd -V -N prepDE \
+-o $FILE_DIR/log.prepDE.out -e $FILE_DIR/log.prepDE.err -b y \
+/usr/people/EDVZ/duenser/tools/stringtie-2.0.6.Linux_x86_64/prepDE.py -i $FILE_DIR/sample_prepDE.txt \
+-g $FILE_DIR/gene_count_matrix_nose.csv -t $FILE_DIR/transcript_count_matrix_nose.csv  -l 125
+
+echo -e "\n$(date)\n"
+
+```
+
+You need to provide it with a sample prepDE.txt which gives it the directories for each sample. This looks like the following:
+
+```{bash, eval = FALSE}
+Lt.1	./count_matrices/Lt.1/transcripts.gtf
+Lt.2	./count_matrices/Lt.2/transcripts.gtf
+Lt.3	./count_matrices/Lt.3/transcripts.gtf
+Lt.4	./count_matrices/Lt.4/transcripts.gtf
+Lt.5	./count_matrices/Lt.5/transcripts.gtf
+On.1	./count_matrices/On.1/transcripts.gtf
+On.2	./count_matrices/On.2/transcripts.gtf
+On.3	./count_matrices/On.3/transcripts.gtf
+On.4	./count_matrices/On.4/transcripts.gtf
+On.5	./count_matrices/On.5/transcripts.gtf
+Ov.1	./count_matrices/Ov.1/transcripts.gtf
+Ov.2	./count_matrices/Ov.2/transcripts.gtf
+Ov.3	./count_matrices/Ov.3/transcripts.gtf
+Ov.4	./count_matrices/Ov.4/transcripts.gtf
+Ov.5	./count_matrices/Ov.5/transcripts.gtf
+Tt.1	./count_matrices/Tt.1/transcripts.gtf
+Tt.2	./count_matrices/Tt.2/transcripts.gtf
+Tt.3	./count_matrices/Tt.3/transcripts.gtf
+Tt.4	./count_matrices/Tt.4/transcripts.gtf
+Tt.5	./count_matrices/Tt.5/transcripts.gtf
+```
