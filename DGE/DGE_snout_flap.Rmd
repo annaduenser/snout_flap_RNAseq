@@ -1,0 +1,184 @@
+---
+title: "DESeq2"
+author: "Anna Duenser"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+#github-repo: "https://github.com/"
+output:
+  bookdown::gitbook:
+    config:
+      fontsettings:
+        theme: night
+        family: sans
+        size: 2
+  bookdown::pdf_document2:
+    keep_tex: true
+header-includes:
+- \usepackage{hyperref}
+- \usepackage{float}
+- \usepackage{caption}
+- \captionsetup[figure]{font=small}
+#subtitle: University of Graz, Institut for Biology
+#bibliography: bib.bibtex
+#biblio-style: authoryear
+#link-citations: yes
+urlcolor: blue
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(
+  fig.pos   = "H",
+  out.extra = "",
+  fig.align = "center",
+  out.width = "100%",
+  echo      = TRUE,
+  include   = TRUE
+  )
+# Our Libraries
+VLIBS <- c("tidyverse", "patchwork", "here", "readxl", "bookdown")
+# Use Colors in Plots
+# https://stackoverflow.com/questions/42458412/plotting-data-by-color-variable-with-ggplot2-in-r#comment72062654_42458412
+colorBlindGrey  <- c("#C5C1C1" ,"#464343", "#E69F00", "#56B4E9", "#009E73",
+                       "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+F_LoadLibs <- function(x){
+  print(x)
+  if(!require(x, character.only = TRUE)) install.packages(x); library(x, character.only = TRUE);
+  return(T)
+}
+# https://stackoverflow.com/questions/62140483/how-to-interpret-dplyr-message-summarise-regrouping-output-by-x-override
+options(dplyr.summarise.inform=F)
+# https://stackoverflow.com/questions/13286531/how-to-suppress-warnings-when-plotting-with-ggplot
+options(warn=-1)
+sapply(VLIBS, F_LoadLibs)
+rm(VLIBS, F_LoadLibs)
+
+```
+
+```{r}
+library("DESeq2")
+#install.packages("ashr")
+library("ashr")
+```
+
+```{r}
+LAKE <- "LT" # change to lake of interest
+FILE.DIR     <- paste("directory")
+GENE.MATRIX  <- paste("gene_count_matrix_nose_", LAKE, ".csv", sep = "")
+PHENOTYPE.TABLE <- paste("phenotype_nose.txt", sep = "")
+PATH.OUT <- paste(FILE.DIR, "/Output/", LAKE, "/", sep = "")
+DATE <- format(Sys.time(), "%m%d%Y")
+```
+
+```{r}
+
+# gene/transcript count matrix
+gcmatrix <- read.csv(GENE.MATRIX, row.names = 1)
+
+# read phenotype table
+sampleTable <- read.table(PHENOTYPE.TABLE, header = T)
+
+# select the rows that you need, if too much info
+rownames(sampleTable) <- sampleTable[,1]
+# add 6 if using the full matrix with OJ and PJ
+
+# head of gcmatrix and rows of sampleTable have to have same order!
+sampleTable <- sampleTable %>% 
+  filter(lake == LAKE)
+
+colnames(gcmatrix) == rownames(sampleTable)
+
+#sampleTable$condition2 <- factor(sampleTable$condition, labels = c("nose","ano_nose"))
+#sampleTable$condition <- fct_recode(sampleTable$condition, ano_nose = "no_nose")
+#str(sampleTable$condition)
+#sampleTable$condition <- fct_relevel(sampleTable$condition, "ano_nose", after = 2)
+#str(sampleTable$condition)
+
+
+```
+
+Run DESeq2 normalization and render results
+```{r}
+dds <- DESeq2::DESeqDataSetFromMatrix(countData = gcmatrix,
+                              colData = sampleTable,
+                              design= ~ condition)
+
+dds <- DESeq2::DESeq(dds)
+
+vsd <- varianceStabilizingTransformation(dds)
+# create matrix from vst assay
+expr_matrix <- (assay(vsd))
+
+write.csv(as.data.frame(expr_matrix), 
+          file = paste("normalized_gcmatrix_", LAKE,"_", DATE, ".csv", sep = ""))
+
+resultsNames(dds)
+
+temp_res <- DESeq2::results(dds, contrast = c("condition", "nose", "no_nose"), alpha = 0.05)
+```
+
+Make MA plot
+```{r}
+
+temp_shrink <- DESeq2::lfcShrink(dds, contrast = c("condition", "nose", "no_nose"), type="ashr")
+
+pdf(paste(PATH.OUT, LAKE, "_MA_shrink_", DATE, ".pdf", sep = ""))
+DESeq2::plotMA(temp_shrink, ylim = c(-2,2))
+dev.off()
+
+pdf(paste(PATH.OUT, LAKE, "_MA_res_", DATE, ".pdf", sep = ""))
+DESeq2::plotMA(temp_res, ylim = c(-2,2))
+dev.off()
+
+# using 'ashr' for LFC shrinkage. If used in published research, please cite:
+#    Stephens, M. (2016) False discovery rates: a new deal. Biostatistics, 18:2.
+#    https://doi.org/10.1093/biostatistics/kxw041
+
+```
+Volcano plot
+```{r}
+pdf(paste(PATH.OUT,LAKE,"_VOLCANO_", DATE, ".pdf", sep = ""))
+  par(mar=c(5,5,5,5), cex = 1.0, cex.main = 1.4, cex.axis = 1.4, cex.lab = 1.4)
+  topT <- as.data.frame(temp_res)
+  with(topT, plot(log2FoldChange, -log10(padj), 
+                  pch = 20,
+                  cex = 1.0, 
+                  xlab = bquote(~Log[2]~fold~change), 
+                  ylab = bquote(~-log[10]~Q~value)))
+  with(subset(topT, 
+              padj<0.05 & abs(log2FoldChange)>2), 
+       points(log2FoldChange, -log10(padj), pch = 20, col = "red", cex = 0.5))
+  abline(v = 0, col = "black", lty = 3, lwd = 1.0)
+  abline(v = -2, col = "black", lty = 4, lwd = 2.0)
+  abline(v = 2, col = "black", lty = 4, lwd = 2.0)
+  abline(h = -log10(max(topT$pvalue[topT$padj<0.05], na.rm=TRUE)), 
+         col="black", lty=4, lwd=2.0)
+  dev.off()
+  
+  pdf(paste(PATH.OUT,LAKE,"_VOLCANO_shrink_", DATE, ".pdf", sep = ""))
+  par(mar=c(5,5,5,5), cex = 1.0, cex.main = 1.4, cex.axis = 1.4, cex.lab = 1.4)
+  topT <- as.data.frame(temp_shrink)
+  with(topT, plot(log2FoldChange, -log10(padj), 
+                  pch = 20,
+                  cex = 1.0, 
+                  xlab = bquote(~Log[2]~fold~change), 
+                  ylab = bquote(~-log[10]~Q~value)))
+  with(subset(topT, 
+              padj<0.05 & abs(log2FoldChange)>2), 
+       points(log2FoldChange, -log10(padj), pch = 20, col = "red", cex = 0.5))
+  abline(v = 0, col = "black", lty = 3, lwd = 1.0)
+  abline(v = -2, col = "black", lty = 4, lwd = 2.0)
+  abline(v = 2, col = "black", lty = 4, lwd = 2.0)
+  abline(h = -log10(max(topT$pvalue[topT$padj<0.05], na.rm=TRUE)), 
+         col="black", lty=4, lwd=2.0)
+  dev.off()
+```
+
+Saving results
+```{r}
+resOrdered <- temp_res[order(temp_res$pvalue),]
+write.csv(as.data.frame(resOrdered), file = paste(PATH.OUT,LAKE,"_ordered_pvalue_005", "_", DATE, ".csv", sep = ""))
+
+resSig <- subset(resOrdered, padj < 0.05)
+write.csv(as.data.frame(resSig), file = paste(PATH.OUT,LAKE,"_resSig_005", "_", DATE, ".csv", sep = ""))
+```
+
+

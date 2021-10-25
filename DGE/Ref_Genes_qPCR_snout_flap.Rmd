@@ -1,0 +1,248 @@
+---
+title: "Reference_Genes_qPCR"
+author: "Anna Duenser"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+#github-repo: "https://github.com/"
+output:
+  bookdown::gitbook:
+    config:
+      fontsettings:
+        theme: night
+        family: sans
+        size: 2
+  bookdown::pdf_document2:
+    keep_tex: true
+header-includes:
+- \usepackage{hyperref}
+- \usepackage{float}
+- \usepackage{caption}
+- \captionsetup[figure]{font=small}
+#subtitle: University of Graz, Institut for Biology
+#bibliography: bib.bibtex
+#biblio-style: authoryear
+#link-citations: yes
+urlcolor: blue
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(
+  fig.pos   = "H",
+  out.extra = "",
+  fig.align = "center",
+  out.width = "100%",
+  echo      = TRUE,
+  include   = TRUE
+  )
+# Our Libraries
+VLIBS <- c("tidyverse", "patchwork", "here", "readxl", "bookdown")
+# Use Colors in Plots
+# https://stackoverflow.com/questions/42458412/plotting-data-by-color-variable-with-ggplot2-in-r#comment72062654_42458412
+colorBlindGrey  <- c("#C5C1C1" ,"#464343", "#E69F00", "#56B4E9", "#009E73",
+                       "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+F_LoadLibs <- function(x){
+  print(x)
+  if(!require(x, character.only = TRUE)) install.packages(x); library(x, character.only = TRUE);
+  return(T)
+}
+# https://stackoverflow.com/questions/62140483/how-to-interpret-dplyr-message-summarise-regrouping-output-by-x-override
+options(dplyr.summarise.inform=F)
+# https://stackoverflow.com/questions/13286531/how-to-suppress-warnings-when-plotting-with-ggplot
+options(warn=-1)
+sapply(VLIBS, F_LoadLibs)
+rm(VLIBS, F_LoadLibs)
+
+```
+
+
+"To choose stably expressed reference genes, we ranked the genes with a small log2 foldchange (-0.05 > l2fc < 0.05) for each separate gene expression analysis. After that we computed the coefficient of variation (CV) for each gene, across the samples for eahc lake of the normalized count matrices. We then checke which genes overlap between the two lakes and added the two CV numbers to order for the lowest CV change.  Ten reference genes were then selected from this list (including 38 genes) based on their base mean expression level to perform qPCR analysis."
+
+
+```{r}
+library("tidyverse")
+library("DESeq2")
+```
+
+Trying to find non diff expr genes
+So in terms of: Failure to reject the null Hypothesis cannot be taken as evidence of no difference!
+```{r}
+LAKE <- "LM"
+LAKE1 <- "LT"
+FILE.DIR     <- paste("directory")
+FILE.PATH <- paste(FILE.DIR, "/Output/", LAKE, "/", sep = "")
+FILE.PATH1 <- paste(FILE.DIR, "/Output/", LAKE1, "/", sep = "")
+PATH.OUT <- paste(FILE.DIR, "/Output/nondiff_refgene_search/", sep = "")
+DATE <- format(Sys.time(), "%m%d%Y")
+
+# set directory 
+setwd(FILE.DIR)
+
+LM <- read_csv(file = paste0(FILE.PATH, LAKE, "_ordered_pvalue_005.csv"))
+LMO <- LM[order(LM$padj),]
+
+LMO_2fold_low <- subset(LMO, log2FoldChange > -0.05)
+nrow(LMO_2fold_low)
+LMO_2fold_final <- subset(LMO_2fold_low, log2FoldChange < 0.05)
+nrow(LMO_2fold_final)
+LMO_2fold <- LMO_2fold_final[order(LMO_2fold_final$padj),]
+write.csv(as.data.frame(LMO_2fold), file = paste(PATH.OUT, LAKE, "_ordered_nondiff", "_", DATE, ".csv", sep = ""))
+
+lmf <- LMO_2fold
+# separate gene_id and ensembl_id
+lmf_names <- lmf %>%
+  dplyr::select(X1) %>% 
+  separate(X1,
+           c("gene_id", "ensembl"),
+           sep = "[|]", remove = FALSE)
+# replace ensembl_ids that are missing with gene_id
+lmf_names$ensembl <- ifelse(is.na(lmf_names$ensembl), lmf_names$gene_id, lmf_names$ensembl)
+# merge names and data frame
+lmfo <- merge(lmf_names, lmf,  by = "X1")
+#lmfo <- lmfo[order(lmfo$baseMean, decreasing = TRUE),]
+nrow(lmfo)
+
+
+LT <- read_csv(file = paste0(FILE.PATH1, LAKE1, "_ordered_pvalue_005.csv"))
+LTO <- LT[order(LT$padj),]
+
+LTO_2fold_low <- subset(LTO, log2FoldChange > -0.05)
+nrow(LTO_2fold_low)
+LTO_2fold_final <- subset(LTO_2fold_low, log2FoldChange < 0.05)
+nrow(LTO_2fold_final)
+LTO_2fold <- LTO_2fold_final[order(LTO_2fold_final$padj),]
+write.csv(as.data.frame(LTO_2fold), file = paste(PATH.OUT , LAKE1, "_ordered_nondiff", "_", DATE, ".csv", sep = ""))
+
+ltf <- LTO_2fold
+nrow(ltf)
+ltf_names <- ltf %>%
+  dplyr::select(X1) %>% 
+  separate(X1,
+           c("gene_id", "ensembl"),
+           sep = "[|]", remove = FALSE)
+# replace ensembl_ids that are missing with gene_id
+ltf_names$ensembl <- ifelse(is.na(ltf_names$ensembl), ltf_names$gene_id, ltf_names$ensembl)
+# merge names and data frame
+ltfo <- merge(ltf_names, ltf,  by = "X1")
+#ltfo <- ltfo[order(ltfo$baseMean, decreasing = TRUE),]
+nrow(ltfo)
+
+```
+
+
+
+
+Find lowest variation across samples
+```{r}
+
+# all <- read_csv(file = paste(PATH.OUT,LAKE,"_", LAKE1,"_overlap_ordered_nondiff", "_", DATE, ".csv", sep = ""))
+
+LMnorm <- read_csv(file = paste0(FILE.DIR,"/normalized_gcmatrix_", LAKE, ".csv"))
+nrow(LMnorm)
+LTnorm <- read_csv(file = paste0(FILE.DIR,"/normalized_gcmatrix_", LAKE1, ".csv"))
+nrow(LMnorm)
+
+
+# norm <- LMnorm %>% 
+#   left_join(., LTnorm, by = c("X1"))
+
+norm_name_LM <- LMnorm %>% 
+  dplyr::select(X1) %>% 
+  separate(X1,
+           c("gene_id", "ensembl"),
+           sep = "[|]", remove = FALSE)
+# replace ensembl_ids that are missing with gene_id
+norm_name_LM$ensembl <- ifelse(is.na(norm_name_LM$ensembl), norm_name_LM$gene_id, norm_name_LM$ensembl)
+normLM <- merge(norm_name_LM, LMnorm,  by = "X1")
+
+norm_name_LT <- LTnorm %>% 
+  dplyr::select(X1) %>% 
+  separate(X1,
+           c("gene_id", "ensembl"),
+           sep = "[|]", remove = FALSE)
+# replace ensembl_ids that are missing with gene_id
+norm_name_LT$ensembl <- ifelse(is.na(norm_name_LT$ensembl), norm_name_LT$gene_id, norm_name_LT$ensembl)
+normLT <- merge(norm_name_LT, LTnorm,  by = "X1")
+
+subLM <-  normLM$X1 %in% lmfo$X1
+genes_LM <- lmfo[subLM,]
+
+subLT <-  normLT$X1 %in% ltfo$X1
+genes_LT <- ltfo[subLT,]
+
+LM_cov <- normLM %>% 
+  mutate(vars = rowVars(as.matrix(normLM[4:13]))) %>% 
+  mutate(cov = rowSds(as.matrix(normLM[4:13]),na.rm = TRUE)/rowMeans(as.matrix(normLM[4:13]))*100)
+
+LT_cov <- normLT %>% 
+  mutate(vars = rowVars(as.matrix(normLT[4:13]))) %>% 
+  mutate(cov = rowSds(as.matrix(normLT[4:13]),na.rm = TRUE)/rowMeans(as.matrix(normLT[4:13]))*100)
+
+#norm_var1 <- norm_var[order(norm_var$cov, decreasing = FALSE),]
+
+addonLM <- LM_cov %>% 
+  dplyr::select(X1, vars, cov)
+
+LMfo <- lmfo %>% 
+  left_join(addonLM, all, by = c("X1" = "X1"))
+
+LMfo <- LMfo[order(LMfo$cov, decreasing = FALSE),]
+
+
+addonLT <- LT_cov %>% 
+  dplyr::select(X1, vars, cov)
+
+LTfo <- ltfo %>% 
+  left_join(addonLT, all, by = c("X1" = "X1"))
+
+LTfo <- LTfo[order(LTfo$cov, decreasing = FALSE),]
+
+  
+all <- LTfo %>% 
+  inner_join(LMfo, by = "X1", suffix = c("LT", "LM"))
+nrow(all)
+write.csv(all, file = paste(PATH.OUT,LAKE,"_", LAKE1,"_ref_genes_ordered_", DATE, ".csv", sep = ""), row.names = FALSE)
+  
+
+allnose <- all %>% 
+  dplyr::select(X1, ensemblLT, baseMeanLT, log2FoldChangeLT, padjLT, varsLT, covLT, baseMeanLM, log2FoldChangeLM, padjLM, varsLM, covLM)
+
+fin <- dplyr::rename(allnose, ensembl = ensemblLT)
+
+overlap_ensembl <- fin %>% 
+  dplyr::select(
+    ensembl
+  )
+
+nrow(overlap_ensembl)
+write.csv(overlap_ensembl, file = paste(PATH.OUT,LAKE,"_", LAKE1,"_overlap_ordered_nondiff_ensemblID", "_", DATE, ".csv", sep = ""), row.names = FALSE)
+
+#select 
+summary(fin$covLT)
+summary(fin$covLM)
+
+# not sure if it makes sense. Maybe go only with the single covLT and covLM
+fin <- fin %>% 
+  mutate(
+    cov = covLT + covLM
+  ) %>% 
+  arrange(cov) %>% 
+  dplyr::select(- varsLT, - varsLM, -padjLT, - padjLM)
+
+fin25 <- fin[fin$cov < quantile(fin$cov , 0.25),]
+
+godata <- read_csv(file = paste0(FILE.DIR, "/Output/LM_biomaRt_GO_id.csv"))
+
+external_name <- godata %>% 
+  dplyr::select(1,2) %>%
+  unique()
+
+ref_genes <- fin25 %>% 
+  left_join(., external_name, by =c("ensembl" = "ensembl_gene_id")) %>% 
+  drop_na()
+
+nrow(ref_genes)
+write_csv(ref_genes, file = paste(PATH.OUT,LAKE,"_", LAKE1,"_smallCV_", DATE, ".csv", sep = ""))
+```
+
+
+
+
