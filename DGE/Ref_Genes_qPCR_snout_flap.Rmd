@@ -54,7 +54,7 @@ rm(VLIBS, F_LoadLibs)
 ```
 
 
-"To choose stably expressed reference genes, we ranked the genes with a small log2 foldchange (-0.05 > l2fc < 0.05) for each separate gene expression analysis. After that we computed the coefficient of variation (CV) for each gene, across the samples for eahc lake of the normalized count matrices. We then checke which genes overlap between the two lakes and added the two CV numbers to order for the lowest CV change.  Ten reference genes were then selected from this list (including 38 genes) based on their base mean expression level to perform qPCR analysis."
+"To choose stably expressed reference genes, we ranked the genes with a small log2 foldchange (-0.05 > l2fc < 0.05) for each separate gene expression analysis. After that we computed the coefficient of variation (CV) for each gene, across the samples for each lake of the normalized count matrices. We then checked which genes overlap between the two lakes and added the two CV numbers to order for the lowest CV change.  Ten reference genes were then selected from this list (including 38 genes) based on their base mean expression level to perform qPCR analysis."
 
 
 ```{r}
@@ -62,8 +62,7 @@ library("tidyverse")
 library("DESeq2")
 ```
 
-Trying to find non diff expr genes
-So in terms of: Failure to reject the null Hypothesis cannot be taken as evidence of no difference!
+Finding genes with small foldchange
 ```{r}
 LAKE <- "LM"
 LAKE1 <- "LT"
@@ -219,7 +218,7 @@ write.csv(overlap_ensembl, file = paste(PATH.OUT,LAKE,"_", LAKE1,"_overlap_order
 summary(fin$covLT)
 summary(fin$covLM)
 
-# not sure if it makes sense. Maybe go only with the single covLT and covLM
+# adding cov for summary
 fin <- fin %>% 
   mutate(
     cov = covLT + covLM
